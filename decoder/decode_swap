@@ -2,16 +2,16 @@
 import optparse
 import sys
 import models
-import os
 from collections import namedtuple
+import os
 
 optparser = optparse.OptionParser()
 optparser.add_option("-i", "--input", dest="input", default="data/input", help="File containing sentences to translate (default=data/input)")
 optparser.add_option("-t", "--translation-model", dest="tm", default="data/tm", help="File containing translation model (default=data/tm)")
 optparser.add_option("-l", "--language-model", dest="lm", default="data/lm", help="File containing ARPA-format language model (default=data/lm)")
 optparser.add_option("-n", "--num_sentences", dest="num_sents", default=sys.maxint, type="int", help="Number of sentences to decode (default=no limit)")
-optparser.add_option("-k", "--translations-per-phrase", dest="k", default=100, type="int", help="Limit on number of translations to consider per phrase (default=1)")
-optparser.add_option("-s", "--stack-size", dest="s", default=100, type="int", help="Maximum stack size (default=1)")
+optparser.add_option("-k", "--translations-per-phrase", dest="k", default=10, type="int", help="Limit on number of translations to consider per phrase (default=1)")
+optparser.add_option("-s", "--stack-size", dest="s", default=10000, type="int", help="Maximum stack size (default=1)")
 optparser.add_option("-v", "--verbose", dest="verbose", action="store_true", default=False,  help="Verbose mode (default=off)")
 opts = optparser.parse_args()[0]
 
@@ -25,7 +25,6 @@ for word in set(sum(french,())):
     tm[(word,)] = [models.phrase(word, 0.0)]
 
 sys.stderr.write("Decoding %s...\n" % (opts.input,))
-
 for f in french:
   # The following code implements a monotone decoding
   # algorithm (one that doesn't permute the target phrases).
@@ -43,13 +42,78 @@ for f in french:
           for phrase in tm[f[i:j]]:
             logprob = h.logprob + phrase.logprob
             lm_state = h.lm_state
+
             for word in phrase.english.split():
+
               (lm_state, word_logprob) = lm.score(lm_state, word)
               logprob += word_logprob
+
             logprob += lm.end(lm_state) if j == len(f) else 0.0
+
             new_hypothesis = hypothesis(logprob, lm_state, h, phrase)
             if lm_state not in stacks[j] or stacks[j][lm_state].logprob < logprob: # second case is recombination
               stacks[j][lm_state] = new_hypothesis 
+
+      # for word swapping with 'distortion limit' = 1
+      # if i < len(f)-1:
+      #   if (f[i+1],) in tm and (f[i],) in tm:
+      #     for word1 in tm[(f[i+1],)]:
+      #       logprob = h.logprob + word1.logprob
+      #       lm_state = h.lm_state
+
+      #       (lm_state, word_logprob) = lm.score(lm_state, word1.english)
+      #       logprob += word_logprob
+
+      #       for word2 in tm[(f[i],)]:
+      #         logprob_temp = logprob + word2.logprob
+      #         (lm_state_temp, word_logprob_temp) = lm.score(lm_state, word2.english)
+
+      #         logprob_temp += word_logprob_temp
+      #         logprob_temp += lm.end(lm_state_temp) if i+2 == len(f) else 0.0
+
+      #         phrase = word2
+      #         phrase = phrase._replace(english = word1.english + ' ' + word2.english)
+      #         phrase = phrase._replace(logprob = word1.logprob + word2.logprob)
+
+      #         new_hypothesis2 = hypothesis(logprob_temp, lm_state_temp, h, phrase)
+
+      #         if lm_state_temp not in stacks[i+2] or stacks[i+2][lm_state_temp].logprob < logprob_temp: # second case is recombination
+      #           stacks[i+2][lm_state_temp] = new_hypothesis2
+      
+      if i < len(f)-1:
+        if (f[i+1],) in tm and (f[i],) in tm:
+          for phrase1 in tm[(f[i+1],)]:
+            
+            logprob = h.logprob + phrase1.logprob
+            lm_state = h.lm_state
+
+            for word1 in phrase1.english.split():
+
+              (lm_state, word_logprob) = lm.score(lm_state, word1)
+              logprob += word_logprob
+
+              for phrase2 in tm[(f[i],)]:
+
+                logprob_temp = logprob + phrase2.logprob
+                lm_state_temp = lm_state
+
+                for word2 in phrase2.english.split():
+
+                  (lm_state_temp, word_logprob_temp) = lm.score(lm_state_temp, word2)
+                  logprob_temp += word_logprob_temp
+
+                logprob_temp += lm.end(lm_state_temp) if i+2 == len(f) else 0.0
+
+                phrase = phrase1
+                phrase = phrase._replace(english = phrase1.english + ' ' + phrase2.english)
+                phrase = phrase._replace(logprob = phrase1.logprob + phrase2.logprob)
+
+                new_hypothesis2 = hypothesis(logprob_temp, lm_state_temp, h, phrase)
+
+                if lm_state_temp not in stacks[i+2] or stacks[i+2][lm_state_temp].logprob < logprob_temp: # second case is recombination
+                  stacks[i+2][lm_state_temp] = new_hypothesis2
+
+
   winner = max(stacks[-1].itervalues(), key=lambda h: h.logprob)
   def extract_english(h): 
     return "" if h.predecessor is None else "%s%s " % (extract_english(h.predecessor), h.phrase.english)
